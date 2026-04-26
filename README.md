@@ -5,7 +5,7 @@ A Go-based CLI agent that fetches open Erdős problems from the community databa
 ## ✨ Features
 
 - **Automated Scraping**: Fetches the latest open problems from the community database (`problems.yaml`) and scrapes detailed problem descriptions directly from [erdosproblems.com](https://www.erdosproblems.com/).
-- **LLM Integration**: Uses the `gollm` library to interface seamlessly with various LLM providers (OpenAI, Anthropic, Groq, Ollama) and orchestrate proof generation.
+- **LLM Integration**: Uses the `any-llm` library to interface seamlessly with various LLM providers (OpenAI, Anthropic, Groq, Ollama) and orchestrate proof generation.
 - **Secure Credentials**: Prompts securely for API keys and stores them via OS keychain encryption for seamless future runs.
 - **Continuous Solve Loop**: Allows for selecting and solving multiple problems in a continuous execution loop without needing to restart the CLI.
 - **Solution Archiving**: Automatically saves generated proofs as markdown files in a designated `solns/` directory.
