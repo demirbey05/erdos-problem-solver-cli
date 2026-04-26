@@ -55,24 +55,31 @@ func main() {
 
 	displayProblems(openProblems)
 
-	// ── Step 4: User Selection ──────────────────────────────────
-	selected := promptSelection(openProblems)
-	if len(selected) == 0 {
-		fmt.Println("No problems selected. Exiting.")
-		return
-	}
-
-	// ── Step 5: Solve ───────────────────────────────────────────
+	// ── Step 4: Initialize Solver ───────────────────────────────
 	s, err := solver.New(cfg.Provider, cfg.Model, cfg.APIKey, solnsDir)
 	if err != nil {
 		fatalf("Failed to initialize solver: %v", err)
 	}
 
-	for _, problem := range selected {
-		solveProblem(ctx, s, problem)
-	}
+	// ── Step 5: Solve Loop ──────────────────────────────────────
+	for {
+		selected, shouldExit := promptSelection(openProblems)
+		if shouldExit {
+			fmt.Println("Exiting.")
+			return
+		}
 
-	fmt.Println("\n✅ All done! Check the solns/ directory for results.")
+		if len(selected) == 0 {
+			fmt.Println("No valid problems selected. Please try again.")
+			continue
+		}
+
+		for _, problem := range selected {
+			solveProblem(ctx, s, problem)
+		}
+
+		fmt.Println("\n✅ Done solving selected problems! Check the solns/ directory for results.")
+	}
 }
 
 // ensureConfig loads or prompts for API configuration.
@@ -183,14 +190,14 @@ func displayProblems(problems []models.Problem) {
 }
 
 // promptSelection asks the user which problems to solve.
-func promptSelection(problems []models.Problem) []models.Problem {
+func promptSelection(problems []models.Problem) ([]models.Problem, bool) {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print("\nEnter problem numbers to solve (comma-separated, or 'all', or 'prize'): ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(strings.ToLower(input))
 
 	if input == "" {
-		return nil
+		return nil, true
 	}
 
 	// Build lookup map
@@ -200,17 +207,20 @@ func promptSelection(problems []models.Problem) []models.Problem {
 	}
 
 	if input == "all" {
-		return problems
+		return problems, false
 	}
 
 	if input == "prize" {
-		return scraper.FilterPrizeProblems(problems)
+		return scraper.FilterPrizeProblems(problems), false
 	}
 
 	// Parse comma-separated numbers
 	var selected []models.Problem
 	for _, part := range strings.Split(input, ",") {
 		num := strings.TrimSpace(part)
+		if num == "" {
+			continue
+		}
 		if p, ok := lookup[num]; ok {
 			selected = append(selected, p)
 		} else {
@@ -218,7 +228,7 @@ func promptSelection(problems []models.Problem) []models.Problem {
 		}
 	}
 
-	return selected
+	return selected, false
 }
 
 // solveProblem fetches the description, calls the LLM, and saves the result.

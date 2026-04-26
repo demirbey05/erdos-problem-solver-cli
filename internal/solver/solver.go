@@ -28,12 +28,14 @@ type Solver struct {
 func New(provider, model, apiKey, solnsDir string) (*Solver, error) {
 	var llm anyllm.Provider
 	var err error
+
 	switch provider {
 	case "openai":
 		llm, err = openai.New(anyllm.WithAPIKey(apiKey))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create LLM client: %w", err)
 		}
+
 	case "groq":
 		llm, err = groq.New(anyllm.WithAPIKey(apiKey))
 		if err != nil {
