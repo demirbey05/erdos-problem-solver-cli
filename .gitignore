@@ -1,0 +1,15 @@
+# Binary
+erdos-agent
+
+# Solutions (generated, may want to track separately)
+# solns/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
