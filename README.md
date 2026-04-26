@@ -1,1 +1,1 @@
-# erdos-problem-solver-cli
+# Erdos Problem Solver Agent
