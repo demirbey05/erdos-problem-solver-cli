@@ -8,35 +8,56 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teilomillet/gollm"
+	anyllm "github.com/mozilla-ai/any-llm-go"
+	anthropic "github.com/mozilla-ai/any-llm-go/providers/anthropic"
+	gemini "github.com/mozilla-ai/any-llm-go/providers/gemini"
+	groq "github.com/mozilla-ai/any-llm-go/providers/groq"
+	openai "github.com/mozilla-ai/any-llm-go/providers/openai"
 
 	"github.com/demirbey05/erdos-agent/internal/models"
 )
 
 // Solver sends problems to an LLM and saves the generated proofs.
 type Solver struct {
-	llm      gollm.LLM
+	llm      anyllm.Provider
+	model    string
 	solnsDir string
 }
 
 // New creates a Solver backed by the given provider/model/key.
 func New(provider, model, apiKey, solnsDir string) (*Solver, error) {
-	llm, err := gollm.NewLLM(
-		gollm.SetProvider(provider),
-		gollm.SetModel(model),
-		gollm.SetAPIKey(apiKey),
-		gollm.SetMaxTokens(8192),
-		gollm.SetTemperature(0.7),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create LLM client: %w", err)
+	var llm anyllm.Provider
+	var err error
+	switch provider {
+	case "openai":
+		llm, err = openai.New(anyllm.WithAPIKey(apiKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM client: %w", err)
+		}
+	case "groq":
+		llm, err = groq.New(anyllm.WithAPIKey(apiKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM client: %w", err)
+		}
+	case "anthropic":
+		llm, err = anthropic.New(anyllm.WithAPIKey(apiKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM client: %w", err)
+		}
+	case "gemini":
+		llm, err = gemini.New(anyllm.WithAPIKey(apiKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM client: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
 
 	if err := os.MkdirAll(solnsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create solutions directory: %w", err)
 	}
 
-	return &Solver{llm: llm, solnsDir: solnsDir}, nil
+	return &Solver{llm: llm, solnsDir: solnsDir, model: model}, nil
 }
 
 // promptTemplate is the system prompt instructing the LLM how to approach the problem.
@@ -61,13 +82,22 @@ func (s *Solver) Solve(ctx context.Context, problem models.Problem, description 
 
 	fullPrompt := fmt.Sprintf(promptTemplate, problemText.String())
 
-	prompt := gollm.NewPrompt(fullPrompt)
-	response, err := s.llm.Generate(ctx, prompt)
+	response, err := s.llm.Completion(ctx, anyllm.CompletionParams{
+		Model: s.model,
+		Messages: []anyllm.Message{
+			{Role: anyllm.RoleUser, Content: fullPrompt},
+		},
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("LLM generation failed for problem %s: %w", problem.Number, err)
 	}
-
-	return response, nil
+	resp := response.Choices[0].Message.Content
+	respString, ok := resp.(string)
+	if ok {
+		return respString, nil
+	}
+	return respString, nil
 }
 
 // SaveSolution writes the solution to solns/{problem_id}-{attempt_id}.md.
