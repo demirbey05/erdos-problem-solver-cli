@@ -2,6 +2,10 @@
 
 A Go-based CLI agent that fetches open Erdős problems from the community database, sends them to an LLM for proof or disproof attempts, and securely saves the generated solutions.
 
+## 📺 Overview
+
+![Overview](images/overview.gif)
+
 ## ✨ Features
 
 - **Automated Scraping**: Fetches the latest open problems from the community database (`problems.yaml`) and scrapes detailed problem descriptions directly from [erdosproblems.com](https://www.erdosproblems.com/).
