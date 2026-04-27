@@ -2,6 +2,7 @@ package solver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,16 @@ import (
 	"github.com/demirbey05/erdos-agent/internal/models"
 )
 
+// SupportedProviders lists the valid LLM provider names.
+var SupportedProviders = []string{"openai", "anthropic", "groq", "gemini", "ollama"}
+
+// llmTimeout is the maximum time to wait for an LLM response.
+// Mathematical proof generation can take extremely long, so we set a generous limit.
+const llmTimeout = 120 * time.Minute
+
+// maxRetries is the number of retry attempts for transient LLM errors.
+const maxRetries = 3
+
 // Solver sends problems to an LLM and saves the generated proofs.
 type Solver struct {
 	llm      anyllm.Provider
@@ -24,35 +35,56 @@ type Solver struct {
 	solnsDir string
 }
 
+// IsValidProvider returns true if the given provider name is supported.
+func IsValidProvider(provider string) bool {
+	for _, p := range SupportedProviders {
+		if strings.EqualFold(p, provider) {
+			return true
+		}
+	}
+	return false
+}
+
 // New creates a Solver backed by the given provider/model/key.
 func New(provider, model, apiKey, solnsDir string) (*Solver, error) {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	model = strings.TrimSpace(model)
+
+	if provider == "" {
+		return nil, fmt.Errorf("provider cannot be empty")
+	}
+	if model == "" {
+		return nil, fmt.Errorf("model cannot be empty")
+	}
+	if !IsValidProvider(provider) {
+		return nil, fmt.Errorf("unsupported provider %q. Supported providers: %s",
+			provider, strings.Join(SupportedProviders, ", "))
+	}
+
+	opts := []anyllm.Option{
+		anyllm.WithAPIKey(apiKey),
+		anyllm.WithTimeout(llmTimeout),
+	}
+
 	var llm anyllm.Provider
 	var err error
 
 	switch provider {
 	case "openai":
-		llm, err = openai.New(anyllm.WithAPIKey(apiKey))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create LLM client: %w", err)
-		}
-
+		llm, err = openai.New(opts...)
 	case "groq":
-		llm, err = groq.New(anyllm.WithAPIKey(apiKey))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create LLM client: %w", err)
-		}
+		llm, err = groq.New(opts...)
 	case "anthropic":
-		llm, err = anthropic.New(anyllm.WithAPIKey(apiKey))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create LLM client: %w", err)
-		}
+		llm, err = anthropic.New(opts...)
 	case "gemini":
-		llm, err = gemini.New(anyllm.WithAPIKey(apiKey))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create LLM client: %w", err)
-		}
+		llm, err = gemini.New(opts...)
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", provider)
+		return nil, fmt.Errorf("unsupported provider %q. Supported providers: %s",
+			provider, strings.Join(SupportedProviders, ", "))
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %s LLM client: %w", provider, err)
 	}
 
 	if err := os.MkdirAll(solnsDir, 0755); err != nil {
@@ -70,6 +102,7 @@ const promptTemplate = `Don't search the internet. This is a test to see how wel
 REMEMBER - this unconditional argument may require non-trivial, creative and novel elements.`
 
 // Solve sends the problem to the LLM and returns the generated solution text.
+// It retries on transient errors (timeouts, temporary network issues) up to maxRetries times.
 func (s *Solver) Solve(ctx context.Context, problem models.Problem, description string) (string, error) {
 	// Build full problem context
 	var problemText strings.Builder
@@ -84,22 +117,106 @@ func (s *Solver) Solve(ctx context.Context, problem models.Problem, description 
 
 	fullPrompt := fmt.Sprintf(promptTemplate, problemText.String())
 
-	response, err := s.llm.Completion(ctx, anyllm.CompletionParams{
+	params := anyllm.CompletionParams{
 		Model: s.model,
 		Messages: []anyllm.Message{
 			{Role: anyllm.RoleUser, Content: fullPrompt},
 		},
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("LLM generation failed for problem %s: %w", problem.Number, err)
 	}
-	resp := response.Choices[0].Message.Content
-	respString, ok := resp.(string)
-	if ok {
+
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Check if context was already cancelled (e.g. user hit Ctrl+C)
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
+
+		if attempt > 1 {
+			backoff := time.Duration(attempt*attempt) * 10 * time.Second
+			fmt.Printf("  ↻ Retry %d/%d in %v...\n", attempt, maxRetries, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return "", fmt.Errorf("operation cancelled during retry backoff: %w", ctx.Err())
+			}
+		}
+
+		response, err := s.llm.Completion(ctx, params)
+		if err != nil {
+			lastErr = err
+
+			// Context cancelled by user (Ctrl+C) — don't retry
+			if errors.Is(err, context.Canceled) {
+				return "", fmt.Errorf("LLM request cancelled by user for problem %s", problem.Number)
+			}
+
+			// Context deadline exceeded — could be our timeout or a parent context
+			if errors.Is(err, context.DeadlineExceeded) {
+				fmt.Printf("  ⚠ LLM request timed out for problem %s (attempt %d/%d)\n",
+					problem.Number, attempt, maxRetries)
+				continue
+			}
+
+			// Check for transient network errors (retryable)
+			errMsg := strings.ToLower(err.Error())
+			if isTransientError(errMsg) {
+				fmt.Printf("  ⚠ Transient error for problem %s (attempt %d/%d): %v\n",
+					problem.Number, attempt, maxRetries, err)
+				continue
+			}
+
+			// Non-retryable error (auth, invalid request, etc.)
+			return "", fmt.Errorf("LLM generation failed for problem %s: %w", problem.Number, err)
+		}
+
+		// Validate response
+		if response == nil {
+			return "", fmt.Errorf("LLM returned nil response for problem %s", problem.Number)
+		}
+		if len(response.Choices) == 0 {
+			return "", fmt.Errorf("LLM returned empty response (no choices) for problem %s", problem.Number)
+		}
+
+		resp := response.Choices[0].Message.Content
+		respString, ok := resp.(string)
+		if !ok {
+			return "", fmt.Errorf("LLM returned unexpected response type %T for problem %s", resp, problem.Number)
+		}
+		if strings.TrimSpace(respString) == "" {
+			return "", fmt.Errorf("LLM returned empty solution text for problem %s", problem.Number)
+		}
+
 		return respString, nil
 	}
-	return respString, nil
+
+	return "", fmt.Errorf("LLM generation failed for problem %s after %d attempts: %w",
+		problem.Number, maxRetries, lastErr)
+}
+
+// isTransientError checks if an error message indicates a transient/retryable failure.
+func isTransientError(errMsg string) bool {
+	transientPatterns := []string{
+		"timeout",
+		"deadline exceeded",
+		"connection refused",
+		"connection reset",
+		"broken pipe",
+		"eof",
+		"temporary failure",
+		"503",
+		"502",
+		"429",
+		"rate limit",
+		"overloaded",
+		"server error",
+		"internal server error",
+	}
+	for _, pattern := range transientPatterns {
+		if strings.Contains(errMsg, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // SaveSolution writes the solution to solns/{problem_id}-{attempt_id}.md.

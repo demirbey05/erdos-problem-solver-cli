@@ -5,9 +5,10 @@ A Go-based CLI agent that fetches open Erdős problems from the community databa
 ## ✨ Features
 
 - **Automated Scraping**: Fetches the latest open problems from the community database (`problems.yaml`) and scrapes detailed problem descriptions directly from [erdosproblems.com](https://www.erdosproblems.com/).
-- **LLM Integration**: Uses the `any-llm` library to interface seamlessly with various LLM providers (OpenAI, Anthropic, Groq, Ollama) and orchestrate proof generation.
+- **LLM Integration**: Uses the `any-llm` library to interface seamlessly with various LLM providers (OpenAI, Anthropic, Gemini, Groq, Ollama) and orchestrate proof generation.
 - **Secure Credentials**: Prompts securely for API keys and stores them via OS keychain encryption for seamless future runs.
 - **Continuous Solve Loop**: Allows for selecting and solving multiple problems in a continuous execution loop without needing to restart the CLI.
+- **Robust Error Handling**: Retries automatically on transient errors (timeouts, rate limits, network issues) with exponential backoff, and supports long-running LLM requests (up to 120 minutes).
 - **Solution Archiving**: Automatically saves generated proofs as markdown files in a designated `solns/` directory.
 
 ## 🚀 Getting Started
@@ -36,7 +37,7 @@ A Go-based CLI agent that fetches open Erdős problems from the community databa
 
 ## 🛠 Usage & Workflow
 
-1. **Configuration**: On the first run, the agent will prompt you to select an LLM provider (e.g., `openai`, `anthropic`, `groq`, `ollama`), a specific model, and your API key (hidden input). This configuration is securely encrypted and saved to `~/.erdos-agent/config.enc`.
+1. **Configuration**: On the first run, the agent will prompt you to select an LLM provider (e.g., `openai`, `anthropic`, `gemini`, `groq`, `ollama`), a specific model, and your API key (hidden input). This configuration is securely encrypted and saved to `~/.erdos-agent/config.enc`.
 2. **Problem Selection**: The agent retrieves and displays a list of currently open Erdős problems. You can then:
    - Enter a comma-separated list of problem numbers (e.g., `1, 42, 108`).
    - Type `all` to attempt all open problems.

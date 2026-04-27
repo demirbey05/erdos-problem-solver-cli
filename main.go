@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -106,12 +107,17 @@ func promptForConfig() (keystore.StoredConfig, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n── LLM Provider Setup ─────────────────────────────")
-	fmt.Println("Supported providers: openai, anthropic, groq, ollama")
+	fmt.Printf("Supported providers: %s\n", strings.Join(solver.SupportedProviders, ", "))
 	fmt.Print("Provider: ")
 	provider, _ := reader.ReadString('\n')
-	provider = strings.TrimSpace(provider)
+	provider = strings.TrimSpace(strings.ToLower(provider))
 	if provider == "" {
 		provider = "openai"
+	}
+
+	if !solver.IsValidProvider(provider) {
+		return keystore.StoredConfig{}, fmt.Errorf("unsupported provider %q. Supported providers: %s",
+			provider, strings.Join(solver.SupportedProviders, ", "))
 	}
 
 	defaultModel := defaultModelFor(provider)
@@ -155,6 +161,8 @@ func defaultModelFor(provider string) string {
 	switch strings.ToLower(provider) {
 	case "anthropic":
 		return "claude-sonnet-4-20250514"
+	case "gemini":
+		return "gemini-2.5-pro"
 	case "groq":
 		return "llama-3.3-70b-versatile"
 	case "ollama":
@@ -256,12 +264,22 @@ func solveProblem(ctx context.Context, s *solver.Solver, problem models.Problem)
 	}
 
 	// Solve
-	fmt.Println("  ⏳ Sending to LLM...")
+	fmt.Println("  ⏳ Sending to LLM (this may take a very long time for complex proofs)...")
+	startTime := time.Now()
 	response, err := s.Solve(ctx, problem, description)
+	elapsed := time.Since(startTime)
+
 	if err != nil {
-		fmt.Printf("  ✗ LLM error: %v\n", err)
+		// Check if the user cancelled
+		if ctx.Err() != nil {
+			fmt.Printf("  ✗ Operation cancelled after %v\n", elapsed.Round(time.Second))
+			return
+		}
+		fmt.Printf("  ✗ LLM error after %v: %v\n", elapsed.Round(time.Second), err)
 		return
 	}
+
+	fmt.Printf("  ✓ LLM responded in %v\n", elapsed.Round(time.Second))
 
 	// Save
 	path, err := s.SaveSolution(problem, response)
